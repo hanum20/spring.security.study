@@ -12,7 +12,7 @@
 
   * 버전 생략 - 스프링 부트의 의존성 관리 기능 사용
 
-    ```
+    ```xml
     <dependency>
     	<groupId>org.springframework.boot</groupId>
     	<artifactId>spring-boot-starter-security</artifactId>
@@ -84,4 +84,175 @@
   ```
 
   * `{noop}`는 페스워드 인코딩을 하지 않겠다는 뜻
+
+
+
+## JPA 연동
+
+* JPA와 H2 의존성 추가
+
+  ```xml
+  <dependency>
+  	<groupId>org.springframework.boot</groupId>
+  	<artifactId>spring-boot-starter-data-jpa</artifactId>
+  </dependency>
+  <dependency>
+  	<groupId>com.h2database</groupId>
+  	<artifactId>h2</artifactId>
+  	<scope>runtime</scope>
+  </dependency>
+  ```
+
+* 유저 정보를 나타낼 클래스 추가
+
+  ```
+  @Entity
+  public class Account {
+  
+      @Id @GeneratedValue
+      private Integer id;
+  
+      @Column(unique = true)
+      private String username;
+  
+      private String password;
+  
+      private String role;
+  ...
+  }
+  ```
+
+* config 변경
+
+  ```java
+  @Configuration
+  @EnableWebSecurity
+  public class SecurityConfig extends WebSecurityConfigurerAdapter {
+  
+      @Override
+      protected void configure(HttpSecurity http) throws Exception {
+          http
+              // Request 설정
+              .authorizeRequests()
+                  .antMatchers("/", "/info", "/account/**").permitAll()
+                  .antMatchers("/admin/**").hasRole("ADMIN")
+                  .anyRequest().authenticated()
+              .and()
+              // 로그인 설정
+              .formLogin()
+              .and()
+              // 요청 설정
+              .httpBasic();
+      }
+  }
+  ```
+
+* JpaRepository
+
+  ```java
+  public interface AccountRepository extends JpaRepository<Account, Long> {
+  
+      Account findByUsername(String username);
+  }
+  ```
+
+*  Service
+
+  ```java
+  @Service
+  public class AccountService implements UserDetailsService {
+  
+      @Autowired
+      AccountRepository accountRepository;
+  
+      @Override
+      public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+          Account account = accountRepository.findByUsername(username);
+  
+          if(account == null){
+              throw new UsernameNotFoundException(username);
+          }
+  
+        
+          return User.builder()
+                  .username(account.getUsername())
+                  .password(account.getPassword())
+                  .roles(account.getRole())
+                  .build();
+      }
+  
+      public Account createAccount(Account account) throws Exception {
+          account.setPassword("{noop}" + account.getPassword());
+  
+          return accountRepository.save(account);
+      }
+  }
+  ```
+
+  * 예전에는 `User`가 없어서 어댑터를 직접 구현하여 UserDetails를 리턴해 주어야 했었다.
+
+    * 이 어댑터는 상황에 따라서 구현이 필요할 수도 있음
+
+  * 패스워드 인코더를 위와 같이 설정한다.
+
+    ```java
+    account.setPassword("{noop}" + account.getPassword());
+    ```
+
+* Controller
+
+  ```java
+  @RestController
+  public class AccountController {
+  
+      @Autowired
+      AccountService accountService;
+  
+      @GetMapping("/account/{role}/{username}/{password}")
+      public Account createAccount(@ModelAttribute Account account) throws Exception {
+          return accountService.createAccount(account);
+      }
+  }
+  ```
+
+  ```java
+  @RestController
+  public class HelloController {
+  
+      @GetMapping
+      public String index(){
+          return "Hello Security!";
+      }
+  
+      @GetMapping("/user/info")
+      public String userInfo() {
+          return "Hello User";
+      }
+  
+      @GetMapping("/admin/info")
+      public String adminInfo() {
+          return "Hello admin";
+      }
+  }
+  ```
+
+* `UserDetailsService`
+
+  * spring security에서 옴
+  * 인증 관리 할 때, DAO 인터페이스를 이용해서 데이터베이스의 사용자 정보를 다룬다.
+    * 여기서는 JPA를 사용했기 때문에 JPA 구현제를 주입받아 사용한다.
+  * 디비의 종류에 제한은 없음
+
+*  스프링 시큐리티는 특수한 패스워드 패턴을 요구함.
+
+  * 패스워드 인코더
+
+    ```
+    123 (X)
+    {noop}123 (O)
+    ```
+
+*  샘플 코드 로직
+
+  * 제한된 페이지(`/user/info`)로 접근 > 로그인 페이지 리다이렉트 > 회원가입 요청(`/account/{role}/{username}/{password}`) > 결과 리턴 > 제한된 페이지(`/user/info`) 접근 > 로그인 페이지 > 로그인 성공 > 기존 접근하려던 제한된 페이지로 리다이렉트 > 성공
 
